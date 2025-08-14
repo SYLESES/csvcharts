@@ -1,0 +1,60 @@
+name: Android CI (bootstrap)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # autorise le workflow à pousser les fichiers du wrapper
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Ensure Gradle wrapper (bootstrap if missing)
+        id: wrapper
+        run: |
+          if [ -x "./gradlew" ]; then
+            echo "has_wrapper=true" >> $GITHUB_OUTPUT
+          else
+            echo "Gradle wrapper missing – bootstrapping..."
+            curl -sL https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o gradle.zip
+            unzip -q gradle.zip
+            ./gradle-8.11.1/bin/gradle wrapper --gradle-version 8.11.1 --distribution-type bin
+            rm -rf gradle.zip gradle-8.11.1
+            chmod +x gradlew
+            # Ajoute l'empreinte SHA-256 pour l’intégrité
+            SHA256=$(curl -sL https://services.gradle.org/distributions/gradle-8.11.1-bin.zip.sha256)
+            sed -i "s|^distributionUrl=.*|distributionUrl=https://services.gradle.org/distributions/gradle-8.11.1-bin.zip|g" gradle/wrapper/gradle-wrapper.properties
+            echo "distributionSha256Sum=${SHA256}" >> gradle/wrapper/gradle-wrapper.properties
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add gradle/wrapper/gradle-wrapper.properties gradle/wrapper/gradle-wrapper.jar gradlew gradlew.bat
+            git commit -m "ci: bootstrap Gradle wrapper 8.11.1" || echo "No changes to commit"
+            git push
+          fi
+
+      - name: Build Debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Build Release AAB
+        run: ./gradlew :app:bundleRelease --stacktrace
+
+      - name: Upload APK/AAB artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-outputs
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/bundle/release/*.aab
